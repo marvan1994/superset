@@ -1,0 +1,59 @@
+version: '3.7'
+
+services:
+  # Service for Superset's own metadata database
+  db:
+    image: postgres:13
+    container_name: superset_db
+    restart: always
+    environment:
+      - POSTGRES_USER=superset
+      - POSTGRES_PASSWORD=superset
+      - POSTGRES_DB=superset
+    volumes:
+      - db_data:/var/lib/postgresql/data
+
+  # Service for caching
+  redis:
+    image: redis:latest
+    container_name: superset_cache
+    restart: always
+    volumes:
+      - redis_data:/data
+
+  # The main Superset application service
+  superset-app:
+    build:
+      context: ./superset  # Use our custom Dockerfile in the 'superset' directory
+    container_name: superset_app
+    restart: always
+    ports:
+      - "8088:8088"  # Expose port 8088 to be accessible from localhost:8088
+    depends_on:
+      - db
+      - redis
+      - db-seeder # Wait for the seeder to finish before starting
+    environment:
+      # Use the credentials for the metadata 'db' service
+      - "SUPERSET_SECRET_KEY=a_really_strong_and_long_secret_key" # IMPORTANT: Change this in production
+      - "SUPERSET_CONFIG_PATH=/app/superset_config.py"
+      - SUPERSET_HOME=/app/superset_home  # 👈 указываем путь
+      - SUPERSET_CONFIG_PATH=/app/superset_config.py
+    volumes:
+      - ./superset/superset_config.py:/app/superset_config.py
+      - duckdb_storage:/data # Mount the shared volume to /data
+      - ./superset_home:/app/superset_home
+ 
+  # One-shot service to generate our DuckDB database
+  db-seeder:
+    build:
+      context: ./data_generator
+      dockerfile: Dockerfile  # We will create this Dockerfile next
+    container_name: duckdb_seeder
+    volumes:
+      - duckdb_storage:/data # Mount the shared volume to /data
+
+volumes:
+  db_data:
+  redis_data:
+  duckdb_storage:  # The shared volume for the DuckDB file
