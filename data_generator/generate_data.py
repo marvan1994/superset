@@ -202,7 +202,56 @@ def generate_order_items(orders_df, stocks_df):
                 'price_per_stock': round(random.uniform(10.0, 3000.0), 2)
             })
     return pd.DataFrame(data)
+def generate_ab_test_data(n_users=10000, test_days=14):
+    """
+    Generates a DataFrame of synthetic A/B test results for a UI block placement test.
+    Returns two DataFrames: one with raw user-level results, one with a daily summary.
+    """
+    print(f"Generating A/B test data for {n_users} users over {test_days} days...")
+    
+    users = []
+    start_date = datetime.now() - timedelta(days=test_days)
 
+    for user_id in range(n_users):
+        variant = np.random.choice(['A', 'B'])
+        was_exposed, clicked, converted = False, False, False
+        
+        if variant == 'A':  # Top of screen: High exposure, lower intent
+            if np.random.rand() < 0.95:
+                was_exposed = True
+                if np.random.rand() < 0.10:
+                    clicked = True
+                    if np.random.rand() < 0.40:
+                        converted = True
+        else:  # Variant B - Bottom of screen: Low exposure, higher intent
+            if np.random.rand() < 0.30:
+                was_exposed = True
+                if np.random.rand() < 0.25:
+                    clicked = True
+                    if np.random.rand() < 0.60:
+                        converted = True
+
+        users.append({
+            'user_id': user_id, 'variant': variant, 'was_exposed': was_exposed,
+            'clicked': clicked, 'converted': converted,
+            'timestamp': fake.date_time_between(start_date=start_date, end_date='now'),
+            'device_type': np.random.choice(['iOS', 'Android'], p=[0.6, 0.4]),
+            'country': fake.country()
+        })
+
+    ab_test_results = pd.DataFrame(users)
+    
+    # Create the daily summary table
+    ab_test_results['test_date'] = ab_test_results['timestamp'].dt.date
+    ab_test_daily_summary = ab_test_results.groupby(['test_date', 'variant']).agg(
+        users=('user_id', 'nunique'),
+        exposed_users=('was_exposed', lambda x: x.sum()),
+        clicks=('clicked', lambda x: x.sum()),
+        conversions=('converted', lambda x: x.sum())
+    ).reset_index()
+    
+    print("A/B test data generation complete.")
+    return ab_test_results, ab_test_daily_summary
 def main():
     """Main function to generate all data and write to DuckDB."""
     # Ensure the /data directory exists
@@ -210,14 +259,14 @@ def main():
     if not os.path.exists(db_dir):
         print(f"Creating directory: {db_dir}")
         os.makedirs(db_dir)
-
+    
     # --- Generate DataFrames in order of dependency ---
     df_stocks = generate_stocks()
     df_campaigns = generate_ad_campaigns()
     df_ad_clicks = generate_ad_clicks(df_campaigns)
     df_users = generate_users(df_ad_clicks)
     df_activities = generate_user_activity(df_users, df_stocks)
-    
+    ab_results_df, ab_summary_df = generate_ab_test_data(n_users=10000)
     # Special handling for orders and items to ensure total_amount is correct
     df_orders_prelim = generate_user_orders(df_users)
     df_order_items = generate_order_items(df_orders_prelim, df_stocks)
@@ -255,6 +304,20 @@ def main():
     for table_name in tables.keys():
         count = con.execute(f"SELECT COUNT(*) FROM {table_name}").fetchone()[0]
         print(f"Table '{table_name}' contains {count} rows.")
+    
+        # --- Write ab_test_results table ---
+    table_name_ab_results = 'ab_test_results'
+    print(f"Writing table '{table_name_ab_results}'...")
+    con.execute(f"CREATE OR REPLACE TABLE {table_name_ab_results} AS SELECT * FROM ab_results_df")
+    count = con.execute(f"SELECT COUNT(*) FROM {table_name_ab_results}").fetchone()[0]
+    print(f"Successfully inserted {count} rows into '{table_name_ab_results}'.")
+    
+    # --- Write ab_test_daily_summary table ---
+    table_name_ab_summary = 'ab_test_daily_summary'
+    print(f"Writing table '{table_name_ab_summary}'...")
+    con.execute(f"CREATE OR REPLACE TABLE {table_name_ab_summary} AS SELECT * FROM ab_summary_df")
+    count = con.execute(f"SELECT COUNT(*) FROM {table_name_ab_summary}").fetchone()[0]
+    print(f"Successfully inserted {count} rows into '{table_name_ab_summary}'.")
     
     con.close()
     print("\nDatabase seeding complete. DuckDB connection closed.")
